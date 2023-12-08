@@ -61,30 +61,26 @@ class RWConfig(PretrainedConfig):
         new_decoder_architecture=None,
         bias=False,
         parallel_attn=False,
+        rotary_base=10_000.0,
         **kwargs,
     ):
         if alibi:
-            raise NotImplementedError(
-                "alibi is not supported by this version of the model"
-            )
+            raise NotImplementedError("alibi is not supported by this version of the model")
 
         self.model_type = model_type
         self.alibi = False
         self.rotary = True
+        self.rotary_base = rotary_base
 
         self.vocab_size = vocab_size
         # Backward compatibility with n_embed kwarg
         n_embed = kwargs.pop("n_embed", None)
         self.hidden_size = hidden_size if n_embed is None else n_embed
         self.n_layer = (
-            num_hidden_layers
-            if num_hidden_layers is not None
-            else kwargs.pop("n_layer", 2)
+            num_hidden_layers if num_hidden_layers is not None else kwargs.pop("n_layer", 2)
         )
         self.n_head = (
-            num_attention_heads
-            if num_attention_heads is not None
-            else kwargs.pop("n_head", 8)
+            num_attention_heads if num_attention_heads is not None else kwargs.pop("n_head", 8)
         )
         self.layer_norm_epsilon = layer_norm_epsilon
         self.initializer_range = initializer_range
@@ -128,9 +124,10 @@ class FlashRWAttention(torch.nn.Module):
         self.num_heads_kv = config.n_head_kv
         self.hidden_size = config.hidden_size
         self.head_size = self.hidden_size // self.num_heads
+        self.rotary_base = config.rotary_base
 
         self.rotary_emb = PositionRotaryEmbedding.static(
-            config=config, dim=self.head_size, base=10000.0, device=weights.device
+            config=config, dim=self.head_size, base=self.rotary_base, device=weights.device
         )
         self.softmax_scale = self.head_size ** (-0.5)
 
@@ -147,9 +144,7 @@ class FlashRWAttention(torch.nn.Module):
             weights=weights,
             bias=config.bias,
         )
-        self.dense = load_row(
-            config, prefix=f"{prefix}.dense", weights=weights, bias=config.bias
-        )
+        self.dense = load_row(config, prefix=f"{prefix}.dense", weights=weights, bias=config.bias)
 
         if self.num_heads_kv == 1:
             self.kv_head_mapping = torch.zeros(
@@ -187,9 +182,7 @@ class FlashRWAttention(torch.nn.Module):
         # Inplace rotary
         self.rotary_emb(query, torch.select(kv, dim=1, index=0), cos, sin)
 
-        paged_attention.reshape_and_cache(
-            kv[:, 0], kv[:, 1], kv_cache[0], kv_cache[1], slots
-        )
+        paged_attention.reshape_and_cache(kv[:, 0], kv[:, 1], kv_cache[0], kv_cache[1], slots)
 
         # output
         attn_output = torch.empty_like(query)
@@ -240,9 +233,10 @@ class FlashRWLargeAttention(torch.nn.Module):
         self.hidden_size = hidden_size
         self.head_size = hidden_size // num_heads
         self.num_groups = num_groups
+        self.rotary_base = config.rotary_base
 
         self.rotary_emb = PositionRotaryEmbedding.static(
-            config=config, dim=self.head_size, base=10000.0, device=weights.device
+            config=config, dim=self.head_size, base=self.rotary_base, device=weights.device
         )
         self.softmax_scale = self.head_size ** (-0.5)
 
@@ -268,9 +262,7 @@ class FlashRWLargeAttention(torch.nn.Module):
             weights=weights,
             bias=config.bias,
         )
-        self.dense = load_row(
-            config, prefix=f"{prefix}.dense", weights=weights, bias=config.bias
-        )
+        self.dense = load_row(config, prefix=f"{prefix}.dense", weights=weights, bias=config.bias)
 
         self.kv_head_mapping = torch.arange(
             0, self.num_groups, dtype=torch.int32, device=weights.device
@@ -339,9 +331,7 @@ class FlashRWLargeAttention(torch.nn.Module):
                 max_s,
             )
 
-        return self.dense(
-            attn_output.view(-1, self.num_groups * self.num_heads * self.head_size)
-        )
+        return self.dense(attn_output.view(-1, self.num_groups * self.num_heads * self.head_size))
 
 
 class FlashMLP(nn.Module):
@@ -455,9 +445,7 @@ class FlashRWLayer(nn.Module):
                 max_s,
             )
 
-            hidden_states, residual = self.post_attention_layernorm(
-                hidden_states, residual
-            )
+            hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
 
             mlp_output = self.mlp(hidden_states)
 
@@ -613,9 +601,7 @@ class FlashRWForCausalLM(FlashRWPreTrainedModel):
 
         self.transformer = FlashRWModel(config, weights)
 
-        self.lm_head = TensorParallelHead.load(
-            config, prefix="lm_head", weights=weights
-        )
+        self.lm_head = TensorParallelHead.load(config, prefix="lm_head", weights=weights)
 
     def forward(
         self,
