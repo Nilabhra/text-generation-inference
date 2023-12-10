@@ -125,6 +125,7 @@ class FlashRWAttention(torch.nn.Module):
         self.hidden_size = config.hidden_size
         self.head_size = self.hidden_size // self.num_heads
         self.rotary_base = config.rotary_base
+        print(f"Using {self.rotary_base=}")
 
         self.rotary_emb = PositionRotaryEmbedding.static(
             config=config, dim=self.head_size, base=self.rotary_base, device=weights.device
