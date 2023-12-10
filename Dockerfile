@@ -106,7 +106,7 @@ WORKDIR /usr/src
 COPY server/Makefile-flash-att-v2 Makefile
 
 # Build specific version of flash attention v2
-RUN make build-flash-attention-v2-cuda
+RUN MAX_JOBS=8 make build-flash-attention-v2-cuda
 
 # Build Transformers exllama kernels
 FROM kernel-builder as exllama-kernels-builder
