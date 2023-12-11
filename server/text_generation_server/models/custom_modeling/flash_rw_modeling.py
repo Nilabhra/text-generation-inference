@@ -48,6 +48,7 @@ class RWConfig(PretrainedConfig):
         hidden_size=64,
         num_hidden_layers=None,
         num_attention_heads=None,
+        num_ln_in_parallel_attn=None,
         layer_norm_epsilon=1e-5,
         initializer_range=0.02,
         use_cache=True,
@@ -83,6 +84,7 @@ class RWConfig(PretrainedConfig):
             num_attention_heads if num_attention_heads is not None else kwargs.pop("n_head", 8)
         )
         self.layer_norm_epsilon = layer_norm_epsilon
+        self.num_ln_in_parallel_attn = num_ln_in_parallel_attn
         self.initializer_range = initializer_range
         self.use_cache = use_cache
         self.hidden_dropout = hidden_dropout
@@ -452,20 +454,51 @@ class FlashRWLayer(nn.Module):
             return mlp_output, residual
 
 
+class FlashRWLayerNorm(nn.Module):
+    def __init__(self, config, prefix, weights):
+        super().__init__()
+        self.num_ln = config.num_ln_in_parallel_attn
+
+        if config.num_ln == 1:
+            self.input_ln = FastLayerNorm.load(
+                prefix=f"{prefix}.input_layernorm",
+                weights=weights,
+                eps=config.layer_norm_epsilon,
+            )
+        elif self.num_ln == 2:
+            self.ln_attn = FastLayerNorm.load(
+                prefix=f"{prefix}.ln_attn",
+                weights=weights,
+                eps=config.layer_norm_epsilon,
+            )
+            self.ln_mlp = FastLayerNorm.load(
+                prefix=f"{prefix}.ln_mlp",
+                weights=weights,
+                eps=config.layer_norm_epsilon,
+            )
+        else:
+            raise ValueError("Number of layer norms can either be 1 or 2.")
+
+    def forward(
+        self,
+        hidden_states,
+        residual,
+    ):
+        if self.num_ln == 1:
+            ln_hidden_states, residual = self.input_ln(hidden_states, residual)
+            return ln_hidden_states, ln_hidden_states, residual
+        elif self.num_ln == 2:
+            ln_attn, residual = self.ln_attn(hidden_states, residual)
+            ln_mlp, _ = self.ln_mlp(residual)
+            return ln_attn, ln_mlp, residual
+
+
 class FlashRWLargeLayer(nn.Module):
     def __init__(self, layer_id, config, weights):
         super().__init__()
         prefix = f"transformer.h.{layer_id}"
-        self.ln_attn = FastLayerNorm.load(
-            prefix=f"{prefix}.ln_attn",
-            weights=weights,
-            eps=config.layer_norm_epsilon,
-        )
-        self.ln_mlp = FastLayerNorm.load(
-            prefix=f"{prefix}.ln_mlp",
-            weights=weights,
-            eps=config.layer_norm_epsilon,
-        )
+
+        self.ln_layer = FlashRWLayerNorm(config, prefix, weights)
 
         self.self_attention = FlashRWLargeAttention(
             config,
@@ -491,12 +524,12 @@ class FlashRWLargeLayer(nn.Module):
         input_lengths,
         max_s,
     ):
-        ln_attn, residual = self.ln_attn(hidden_states, residual)
-        ln_mlp, _ = self.ln_mlp(residual)
+        # Layer norm.
+        attn_input, mlp_input, residual = self.ln_layer(hidden_states, residual)
 
         # Self attention.
         attn_output = self.self_attention(
-            ln_attn,
+            attn_input,
             cos,
             sin,
             cu_seqlen_prefill,
@@ -508,7 +541,7 @@ class FlashRWLargeLayer(nn.Module):
         )
 
         # MLP.
-        mlp_output = self.mlp(ln_mlp)
+        mlp_output = self.mlp(mlp_input)
 
         intermediate = attn_output + mlp_output
 
