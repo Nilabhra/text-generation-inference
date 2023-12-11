@@ -459,7 +459,7 @@ class FlashRWLayerNorm(nn.Module):
         super().__init__()
         self.num_ln = config.num_ln_in_parallel_attn
 
-        if config.num_ln == 1:
+        if self.num_ln == 1:
             self.input_ln = FastLayerNorm.load(
                 prefix=f"{prefix}.input_layernorm",
                 weights=weights,
