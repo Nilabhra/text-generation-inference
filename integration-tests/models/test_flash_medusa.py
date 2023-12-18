@@ -2,34 +2,33 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def flash_mistral_handle(launcher):
-    with launcher("mistralai/Mistral-7B-Instruct-v0.1") as handle:
+def flash_medusa_handle(launcher):
+    with launcher("FasterDecoding/medusa-vicuna-7b-v1.3", num_shard=2) as handle:
         yield handle
 
 
 @pytest.fixture(scope="module")
-async def flash_mistral(flash_mistral_handle):
-    await flash_mistral_handle.health(300)
-    return flash_mistral_handle.client
+async def flash_medusa(flash_medusa_handle):
+    await flash_medusa_handle.health(300)
+    return flash_medusa_handle.client
 
 
 @pytest.mark.asyncio
 @pytest.mark.private
-async def test_flash_mistral(flash_mistral, response_snapshot):
-    response = await flash_mistral.generate(
-        "Test request", max_new_tokens=10, decoder_input_details=True
+async def test_flash_medusa_simple(flash_medusa, response_snapshot):
+    response = await flash_medusa.generate(
+        "What is Deep Learning?", max_new_tokens=10, decoder_input_details=True
     )
 
     assert response.details.generated_tokens == 10
-    assert response.generated_text == ": Let n = 10 - 1"
     assert response == response_snapshot
 
 
 @pytest.mark.asyncio
 @pytest.mark.private
-async def test_flash_mistral_all_params(flash_mistral, response_snapshot):
-    response = await flash_mistral.generate(
-        "Test request",
+async def test_flash_medusa_all_params(flash_medusa, response_snapshot):
+    response = await flash_medusa.generate(
+        "What is Deep Learning?",
         max_new_tokens=10,
         repetition_penalty=1.2,
         return_full_text=True,
@@ -50,15 +49,17 @@ async def test_flash_mistral_all_params(flash_mistral, response_snapshot):
 
 @pytest.mark.asyncio
 @pytest.mark.private
-async def test_flash_mistral_load(flash_mistral, generate_load, response_snapshot):
+async def test_flash_medusa_load(flash_medusa, generate_load, response_snapshot):
     responses = await generate_load(
-        flash_mistral, "Test request", max_new_tokens=10, n=4
+        flash_medusa, "What is Deep Learning?", max_new_tokens=10, n=4
     )
 
     assert len(responses) == 4
     assert all(
         [r.generated_text == responses[0].generated_text for r in responses]
-    ), f"{[r.generated_text  for r in responses]}"
-    assert responses[0].generated_text == ": Let n = 10 - 1"
+    ), f"{[r.generated_text for r in responses]}"
+    assert (
+        responses[0].generated_text == "\nDeep learning is a subset of machine learning"
+    )
 
     assert responses == response_snapshot

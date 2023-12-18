@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
 };
 use text_generation_client::{
-    Batch, CachedBatch, ClientError, GeneratedText, Generation, PrefillTokens, ShardedClient,
+    Batch, CachedBatch, ClientError, GeneratedText, Generation, ShardedClient, Tokens,
 };
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
@@ -50,10 +50,11 @@ impl Infer {
         max_concurrent_requests: usize,
         requires_padding: bool,
         window_size: Option<u32>,
+        speculate: u32,
         generation_health: Arc<AtomicBool>,
     ) -> Self {
         // Infer shared state
-        let queue = Queue::new(requires_padding, 16, window_size);
+        let queue = Queue::new(requires_padding, 16, window_size, speculate);
         let shared = Arc::new(Shared {
             batching_task: Notify::new(),
         });
@@ -378,15 +379,20 @@ async fn prefill(
     metrics::increment_counter!("tgi_batch_inference_count", "method" => "prefill");
 
     match client.prefill(batch).await {
-        Ok((generations, next_batch)) => {
+        Ok((generations, next_batch, timings)) => {
             // Update health
             generation_health.store(true, Ordering::SeqCst);
+
+            let start_filtering_time = Instant::now();
             // Send generated tokens and filter stopped entries
             filter_send_generations(generations, entries);
 
             // Filter next batch and remove requests that were stopped
             let next_batch = filter_batch(client, next_batch, entries).await;
 
+            metrics::histogram!("tgi_batch_forward_duration", timings.forward.as_secs_f64(), "method" => "prefill");
+            metrics::histogram!("tgi_batch_decode_duration", timings.decode.as_secs_f64(), "method" => "prefill");
+            metrics::histogram!("tgi_batch_filter_duration", start_filtering_time.elapsed().as_secs_f64(), "method" => "prefill");
             metrics::histogram!("tgi_batch_inference_duration", start_time.elapsed().as_secs_f64(), "method" => "prefill");
             metrics::increment_counter!("tgi_batch_inference_success", "method" => "prefill");
             next_batch
@@ -415,15 +421,23 @@ async fn decode(
     metrics::increment_counter!("tgi_batch_inference_count", "method" => "decode");
 
     match client.decode(batches).await {
-        Ok((generations, next_batch)) => {
+        Ok((generations, next_batch, timings)) => {
             // Update health
             generation_health.store(true, Ordering::SeqCst);
+
+            let start_filtering_time = Instant::now();
             // Send generated tokens and filter stopped entries
             filter_send_generations(generations, entries);
 
             // Filter next batch and remove requests that were stopped
             let next_batch = filter_batch(client, next_batch, entries).await;
 
+            if let Some(concat_duration) = timings.concat {
+                metrics::histogram!("tgi_batch_concat_duration", concat_duration.as_secs_f64(), "method" => "decode");
+            }
+            metrics::histogram!("tgi_batch_forward_duration", timings.forward.as_secs_f64(), "method" => "decode");
+            metrics::histogram!("tgi_batch_decode_duration", timings.decode.as_secs_f64(), "method" => "decode");
+            metrics::histogram!("tgi_batch_filter_duration", start_filtering_time.elapsed().as_secs_f64(), "method" => "decode");
             metrics::histogram!("tgi_batch_inference_duration", start_time.elapsed().as_secs_f64(), "method" => "decode");
             metrics::increment_counter!("tgi_batch_inference_success", "method" => "decode");
             next_batch
@@ -523,50 +537,63 @@ fn send_responses(
     }
 
     // Create last Token
-    let token = Token {
-        id: generation.token_id,
-        text: generation.token_text,
-        logprob: generation.token_logprob,
-        special: generation.token_is_special,
-    };
-
-    // generation.top_tokens
-
-    let mut top_tokens = Vec::new();
-    if let Some(top_tokens_) = generation.top_tokens {
-        top_tokens.extend(
+    let tokens_ = generation.tokens.expect("Non empty tokens in generation");
+    let n = tokens_.ids.len();
+    metrics::histogram!("tgi_request_skipped_tokens", (n - 1) as f64);
+    let mut iterator = tokens_
+        .ids
+        .into_iter()
+        .zip(tokens_.logprobs.into_iter())
+        .zip(tokens_.texts.into_iter())
+        .zip(tokens_.is_special.into_iter())
+        .enumerate()
+        .peekable();
+    while let Some((i, (((id, logprob), text), special))) = iterator.next() {
+        let token = Token {
+            id,
+            text,
+            logprob,
+            special,
+        };
+        let top_tokens = if let Some(top_tokens_) = generation.top_tokens.get(i) {
             top_tokens_
                 .ids
-                .into_iter()
-                .zip(top_tokens_.logprobs.into_iter())
-                .zip(top_tokens_.texts.into_iter())
-                .zip(top_tokens_.is_special.into_iter())
-                .map(|(((id, logprob), text), special)| Token {
+                .iter()
+                .zip(top_tokens_.logprobs.iter())
+                .zip(top_tokens_.texts.iter())
+                .zip(top_tokens_.is_special.iter())
+                .map(|(((&id, &logprob), text), &special)| Token {
                     id,
-                    text,
+                    text: text.to_string(),
                     logprob,
                     special,
-                }),
-        )
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        match (&generation.generated_text, iterator.peek()) {
+            (Some(generated_text), None) => {
+                // Generation has ended
+                stopped = true;
+                // Send message
+                entry.response_tx.send(Ok(InferStreamResponse::End {
+                    token,
+                    top_tokens,
+                    generated_text: generated_text.clone(),
+                    queued: entry.queue_time,
+                    start: entry.batch_time.unwrap(),
+                }))?;
+            }
+            _ => {
+                // Send message
+                entry
+                    .response_tx
+                    .send(Ok(InferStreamResponse::Intermediate { token, top_tokens }))?;
+            }
+        }
     }
 
-    if let Some(generated_text) = generation.generated_text {
-        // Generation has ended
-        stopped = true;
-        // Send message
-        entry.response_tx.send(Ok(InferStreamResponse::End {
-            token,
-            top_tokens,
-            generated_text,
-            queued: entry.queue_time,
-            start: entry.batch_time.unwrap(),
-        }))?;
-    } else {
-        // Send message
-        entry
-            .response_tx
-            .send(Ok(InferStreamResponse::Intermediate { token, top_tokens }))?;
-    }
     Ok(stopped)
 }
 
@@ -591,7 +618,7 @@ fn send_errors(error: ClientError, entries: &mut IntMap<u64, Entry>) {
 #[derive(Debug)]
 pub(crate) enum InferStreamResponse {
     // Optional first message
-    Prefill(PrefillTokens),
+    Prefill(Tokens),
     // Intermediate messages
     Intermediate {
         token: Token,

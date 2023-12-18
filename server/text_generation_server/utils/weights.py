@@ -16,7 +16,7 @@ class Weights:
         dtype,
         process_group,
         aliases: Optional[Dict[str, List[str]]] = None,
-        prefix: Optional[str] = None
+        prefix: Optional[str] = None,
     ):
         routing = {}
         for filename in filenames:
@@ -213,7 +213,8 @@ class Weights:
 
             bits, groupsize = self._get_gptq_params()
             from text_generation_server.utils.layers import HAS_EXLLAMA
-            use_exllama = bits==4  and HAS_EXLLAMA and quantize == "gptq"
+
+            use_exllama = bits == 4 and HAS_EXLLAMA and quantize == "gptq"
             weight = (qweight, qzeros, scales, g_idx, bits, groupsize, use_exllama)
         else:
             w = [self.get_sharded(f"{p}.weight", dim=0) for p in prefixes]
@@ -283,7 +284,7 @@ class Weights:
             if use_exllama:
                 qzeros = self.get_sharded(f"{prefix}.qzeros", dim=0)
                 scales = self.get_sharded(f"{prefix}.scales", dim=0)
-                g_idx = self.get_sharded(f"{prefix}.g_idx", dim= 0)
+                g_idx = self.get_sharded(f"{prefix}.g_idx", dim=0)
                 g_idx = g_idx - g_idx[0]
             else:
                 # The triton kernel reorders the scales/zero points instead of the weight/activation.
@@ -326,13 +327,15 @@ class Weights:
 
         return bits, groupsize
 
-    def _set_gptq_params(self, model_id):
+    def _set_gptq_params(self, model_id, revision):
         filename = "config.json"
         try:
             if os.path.exists(os.path.join(model_id, filename)):
                 filename = os.path.join(model_id, filename)
             else:
-                filename = hf_hub_download(model_id, filename=filename)
+                filename = hf_hub_download(
+                    model_id, filename=filename, revision=revision
+                )
             with open(filename, "r") as f:
                 data = json.load(f)
             self.gptq_bits = data["quantization_config"]["bits"]
@@ -343,7 +346,9 @@ class Weights:
                 if os.path.exists(os.path.join(model_id, filename)):
                     filename = os.path.join(model_id, filename)
                 else:
-                    filename = hf_hub_download(model_id, filename=filename)
+                    filename = hf_hub_download(
+                        model_id, filename=filename, revision=revision
+                    )
                 with open(filename, "r") as f:
                     data = json.load(f)
                 self.gptq_bits = data["bits"]
@@ -354,7 +359,9 @@ class Weights:
                     if os.path.exists(os.path.join(model_id, filename)):
                         filename = os.path.join(model_id, filename)
                     else:
-                        filename = hf_hub_download(model_id, filename=filename)
+                        filename = hf_hub_download(
+                            model_id, filename=filename, revision=revision
+                        )
                     with open(filename, "r") as f:
                         data = json.load(f)
                     self.gptq_bits = data["w_bit"]

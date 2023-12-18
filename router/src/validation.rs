@@ -540,7 +540,7 @@ mod tests {
         let max_stop_sequence = 3;
         let max_top_n_tokens = 4;
         let max_input_length = 5;
-        let max_total_tokens = 6;
+        let max_total_tokens = 106;
         let workers = 1;
         let validation = Validation::new(
             workers,
@@ -556,6 +556,7 @@ mod tests {
                 inputs: "Hello".to_string(),
                 parameters: GenerateParameters {
                     top_p: Some(1.0),
+                    max_new_tokens: Some(5),
                     ..default_parameters()
                 },
             })
@@ -570,6 +571,7 @@ mod tests {
                 inputs: "Hello".to_string(),
                 parameters: GenerateParameters {
                     top_p: Some(0.99),
+                    max_new_tokens: Some(5),
                     ..default_parameters()
                 },
             })
@@ -584,6 +586,7 @@ mod tests {
                 inputs: "Hello".to_string(),
                 parameters: GenerateParameters {
                     top_p: None,
+                    max_new_tokens: Some(5),
                     ..default_parameters()
                 },
             })
@@ -600,7 +603,7 @@ mod tests {
         let max_stop_sequences = 3;
         let max_top_n_tokens = 4;
         let max_input_length = 5;
-        let max_total_tokens = 6;
+        let max_total_tokens = 106;
         let workers = 1;
         let validation = Validation::new(
             workers,
@@ -616,6 +619,7 @@ mod tests {
                 inputs: "Hello".to_string(),
                 parameters: GenerateParameters {
                     top_n_tokens: Some(5),
+                    max_new_tokens: Some(5),
                     ..default_parameters()
                 },
             })
@@ -630,6 +634,7 @@ mod tests {
                 inputs: "Hello".to_string(),
                 parameters: GenerateParameters {
                     top_n_tokens: Some(4),
+                    max_new_tokens: Some(5),
                     ..default_parameters()
                 },
             })
@@ -641,6 +646,7 @@ mod tests {
                 inputs: "Hello".to_string(),
                 parameters: GenerateParameters {
                     top_n_tokens: Some(0),
+                    max_new_tokens: Some(5),
                     ..default_parameters()
                 },
             })
@@ -652,6 +658,7 @@ mod tests {
                 inputs: "Hello".to_string(),
                 parameters: GenerateParameters {
                     top_n_tokens: None,
+                    max_new_tokens: Some(5),
                     ..default_parameters()
                 },
             })
