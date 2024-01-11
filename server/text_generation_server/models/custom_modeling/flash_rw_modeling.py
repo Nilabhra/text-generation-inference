@@ -49,6 +49,7 @@ class RWConfig(PretrainedConfig):
         num_hidden_layers=None,
         num_attention_heads=None,
         num_ln_in_parallel_attn=None,
+        ff_factor=4,
         layer_norm_epsilon=1e-5,
         initializer_range=0.02,
         use_cache=True,
@@ -85,6 +86,7 @@ class RWConfig(PretrainedConfig):
         )
         self.layer_norm_epsilon = layer_norm_epsilon
         self.num_ln_in_parallel_attn = num_ln_in_parallel_attn
+        self.ff_factor = ff_factor
         self.initializer_range = initializer_range
         self.use_cache = use_cache
         self.hidden_dropout = hidden_dropout
@@ -342,10 +344,10 @@ class FlashMLP(nn.Module):
         self.act = torch.nn.functional.gelu
 
         self.dense_h_to_4h = TensorParallelColumnLinear.load(
-            config, prefix=f"{prefix}.dense_h_to_4h", weights=weights, bias=config.bias
+            config, prefix=f"{prefix}.uscale", weights=weights, bias=config.bias
         )
         self.dense_4h_to_h = load_row(
-            config, prefix=f"{prefix}.dense_4h_to_h", weights=weights, bias=config.bias
+            config, prefix=f"{prefix}.downscale", weights=weights, bias=config.bias
         )
 
     def forward(self, hidden_states):
