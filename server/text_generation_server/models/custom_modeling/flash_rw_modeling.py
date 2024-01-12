@@ -343,17 +343,17 @@ class FlashMLP(nn.Module):
         super().__init__()
         self.act = torch.nn.functional.gelu
 
-        self.dense_h_to_4h = TensorParallelColumnLinear.load(
-            config, prefix=f"{prefix}.uscale", weights=weights, bias=config.bias
+        self.upscale = TensorParallelColumnLinear.load(
+            config, prefix=f"{prefix}.upscale", weights=weights, bias=config.bias
         )
-        self.dense_4h_to_h = load_row(
+        self.downscale = load_row(
             config, prefix=f"{prefix}.downscale", weights=weights, bias=config.bias
         )
 
     def forward(self, hidden_states):
-        hidden_states = self.dense_h_to_4h(hidden_states)
+        hidden_states = self.upscale(hidden_states)
         hidden_states = self.act(hidden_states)
-        hidden_states = self.dense_4h_to_h(hidden_states)
+        hidden_states = self.downscale(hidden_states)
         return hidden_states
 
 
